@@ -492,6 +492,10 @@ const KIN = (() => {
       g.userData.height = h;
       g.userData.intake = intake;
       g.userData.exhaust = exhaust;
+      // 气门是缸盖 Group 的子节点，其 position 是相对缸盖的【局部】坐标。
+      // 姿态计算必须以这个基准值偏移，绝不能用缸盖的世界 Y——那会把气门推到天上。
+      g.userData.intakeBaseY = intake.position.y;
+      g.userData.exhaustBaseY = exhaust.position.y;
       return g;
     }
 
@@ -509,32 +513,116 @@ const KIN = (() => {
       return g;
     }
 
-    // ---------- 临时静态装配（Task 6 会重构为正式装配） ----------
-    const demoCrank = buildCrankshaft();
-    scene.add(demoCrank);
-    for (let i = 0; i < CONFIG.cylinders; i++) {
-      const z = (i - (CONFIG.cylinders - 1) / 2) * boreSpacing;
-      const s = KIN.pistonPosition(KIN.cycleAngle(0, i) * DEG);
-      const piston = buildPiston();   piston.position.set(0, s, z);  scene.add(piston);
-      const rod = buildConnectingRod();
-      rod.position.set(0, s, z);
-      rod.rotation.z = KIN.rodRotationZ(KIN.cycleAngle(0, i) * DEG);
-      scene.add(rod);
-      const liner = buildCylinderLiner(); liner.position.set(0, 0, z); scene.add(liner);
-      const head = buildCylinderHead();
-      head.position.set(0, liner.userData.height, z);                  scene.add(head);
-    }
-    scene.add(buildFlywheel());
+    /**
+     * 组装整机。返回引用表供动画循环使用。
+     * 曲轴单独持有一个 Group 并以 rotation.z 驱动，保证各缸曲柄销刚性一致。
+     */
+    function buildEngine() {
+      const root = new THREE.Group();
+      const crankshaft = buildCrankshaft();
+      root.add(crankshaft);
 
-    frameObject(scene);
-    Object.assign(window.__debug, { frameObject });
+      const flywheel = buildFlywheel();
+      flywheel.position.z = -((CONFIG.cylinders - 1) * boreSpacing / 2 + boreSpacing * 0.7);
+      root.add(flywheel);
+
+      const units = [];
+      for (let i = 0; i < CONFIG.cylinders; i++) {
+        const z = (i - (CONFIG.cylinders - 1) / 2) * boreSpacing;
+
+        const liner = buildCylinderLiner();
+        liner.position.set(0, 0, z);
+        root.add(liner);
+
+        // 缸盖坐在缸套顶端
+        const head = buildCylinderHead();
+        head.position.set(0, liner.userData.height, z);
+        root.add(head);
+
+        const piston = buildPiston();
+        root.add(piston);
+
+        const rod = buildConnectingRod();
+        root.add(rod);
+
+        units.push({
+          index: i, z, piston, rod, liner, head,
+          intake: head.userData.intake,
+          exhaust: head.userData.exhaust,
+          intakeBaseY: head.userData.intakeBaseY,
+          exhaustBaseY: head.userData.exhaustBaseY,
+        });
+      }
+      return { root, crankshaft, flywheel, units };
+    }
+
+    const engine = buildEngine();
+    scene.add(engine.root);
+
+    /**
+     * 把整机姿态设为给定曲轴角（度）。
+     * 全部输出都是 crankDeg 的纯函数——无累积状态，
+     * 因此暂停、单步、任意跳转得到的姿态完全一致。
+     */
+    function applyPose(eng, crankDeg) {
+      eng.crankshaft.rotation.z = crankDeg * DEG;
+      eng.flywheel.rotation.z = crankDeg * DEG;
+
+      for (const u of eng.units) {
+        const cyc = KIN.cycleAngle(crankDeg, u.index);   // 度
+        const th = cyc * DEG;
+
+        const s = KIN.pistonPosition(th);
+        u.piston.position.set(0, s, u.z);
+        u.rod.position.set(0, s, u.z);
+        u.rod.rotation.z = KIN.rodRotationZ(th);
+
+        // 气门沿 −Y 开启。基准值取气门自身的局部 Y（相对缸盖），
+        // 不是缸盖的世界 Y —— 气门是缸盖的子节点。
+        u.intake.position.y = u.intakeBaseY - KIN.intakeLift(cyc) * CONFIG.maxLift;
+        u.exhaust.position.y = u.exhaustBaseY - KIN.exhaustLift(cyc) * CONFIG.maxLift;
+      }
+    }
+
+    applyPose(engine, 0);
+
+    frameObject(engine.root);
+    Object.assign(window.__debug, { frameObject, engine, applyPose, buildEngine });
+
+    // ---------- 状态 ----------
+    const state = {
+      crankDeg: 0,
+      rpm: 900,
+      paused: false,
+      dtClamp: 0.1,      // 秒。标签页切回时防止角度暴跳
+    };
+
+    const clock = new THREE.Clock();
+
+    Object.assign(window.__debug, { state, clock });
+
+    function advance(dtSec) {
+      if (state.paused || state.rpm <= 0) return;
+      const degPerSec = state.rpm * 6;            // 1 RPM = 6 °/s
+      const next = state.crankDeg + degPerSec * dtSec;
+      state.crankDeg = ((next % KIN.CYCLE_DEG) + KIN.CYCLE_DEG) % KIN.CYCLE_DEG;
+    }
 
     // ---------- 主循环 ----------
     function render() {
+      // 上限钳制：标签页切到后台再切回时 getDelta 可能返回数秒
+      const dt = Math.min(clock.getDelta(), state.dtClamp);
+      advance(dt);
+      applyPose(engine, state.crankDeg);
+      updateHud();
       controls.update();
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
     }
+
+    // updateHud 在 Task 9 实现；先占位以免本任务报错
+    function updateHud() {}
+
     renderer.setAnimationLoop(render);
   </script>
 </body>
