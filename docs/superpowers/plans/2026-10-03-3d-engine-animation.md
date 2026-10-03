@@ -236,7 +236,7 @@ git commit -m "feat: 建立运动学测试通道与活塞位移函数
 - Consumes: Task 1 的 `KIN.CONFIG`、`KIN.DEG`
 - Produces:
   - `KIN.crankPin(theta): { x: number, y: number }` —— 曲柄销在 XY 平面的位置，`θ=0` 时指向 +Y
-  - `KIN.rodRotationZ(theta): number` —— 连杆绕 Z 轴的旋转角（弧度），连杆几何沿 +Y 建模、大头在 −Y 端
+  - `KIN.rodRotationZ(theta): number` —— 连杆绕 Z 轴的旋转角（弧度）。连杆几何：**小头在局部原点，大头在局部 `(0, −rodLength)`**
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -268,16 +268,34 @@ test('连杆长度在任意曲轴角下恒定等于 l', () => {
   }
 });
 
-test('连杆姿态：θ=0 竖直，θ=90° 倾斜 +asin(r/l)', () => {
+test('连杆姿态：θ=0 竖直，θ=90° 倾斜 −asin(r/l)', () => {
   assert.ok(Math.abs(rodRotationZ(0)) < 1e-12, `期望 0，实际 ${rodRotationZ(0)}`);
-  const expected = Math.asin(R / L);
+  // 负号：θ=90° 时曲柄销在 −X 侧，大头必须跟着到 −X 侧
+  const expected = -Math.asin(R / L);
   assert.ok(Math.abs(rodRotationZ(Math.PI / 2) - expected) < 1e-12,
     `期望 ${expected}，实际 ${rodRotationZ(Math.PI / 2)}`);
 });
 
-test('连杆姿态：θ=270° 倾斜 −asin(r/l)（镜像侧）', () => {
-  const expected = -Math.asin(R / L);
+test('连杆姿态：θ=270° 倾斜 +asin(r/l)（镜像侧）', () => {
+  const expected = Math.asin(R / L);
   assert.ok(Math.abs(rodRotationZ(3 * Math.PI / 2) - expected) < 1e-12);
+});
+
+test('连杆大头始终精确咬合在曲柄销上', () => {
+  // 全篇唯一直接校验「连杆 3D 姿态」的断言。其余测试只验证纯函数之间自洽，
+  // 看不见 rodRotationZ 的符号；而符号错误造成的偏差是 2r·|sinθ|，
+  // 在 θ 为 180° 整数倍时恰好为 0 —— 所以静止姿态的截图检查必然漏掉它。
+  for (let d = 0; d < 720; d += 15) {
+    const th = d * Math.PI / 180;
+    const s = pistonPosition(th);
+    const pin = crankPin(th);
+    const a = rodRotationZ(th);
+    // 局部 (0, −l) 绕 Z 转 a 得 (l·sin a, −l·cos a)，再叠加挂载点 (0, s)
+    const bigEndX = L * Math.sin(a);
+    const bigEndY = s - L * Math.cos(a);
+    const gap = Math.hypot(bigEndX - pin.x, bigEndY - pin.y);
+    assert.ok(gap < 1e-9, `θ=${d}° 大头与曲柄销相距 ${gap.toFixed(4)}`);
+  }
 });
 ```
 
@@ -308,15 +326,21 @@ Expected: FAIL —— `crankPin is not a function`。
 
   /**
    * 连杆绕 Z 轴的旋转角。
-   * 连杆几何沿 +Y 建模（小头在原点，大头在 −Y 端），装配到活塞销后旋转此角。
-   * 推导：世界坐标大头→小头 = (−r·sinθ, +√(l²−r²sin²θ))；
-   *       局部轴向 (0,+1) 旋转 α 得 (−sinα, cosα)，对应对上即可。
+   * 连杆几何：小头在局部原点，大头在局部 (0, −l)。装配到活塞销 (0, s) 后旋转此角。
+   * 推导：绕 Z 转 α 后 (0, −l) → (l·sinα, −l·cosα)，
+   *       故大头世界坐标 = (l·sinα, s − l·cosα)。要求它等于曲柄销 (−r·sinθ, r·cosθ)：
+   *         X: l·sinα = −r·sinθ  ⇒ sinα = −r·sinθ / l
+   *         Y: l·cosα = s − r·cosθ = √(l²−r²sin²θ) ⇒ cosα = √(l²−r²sin²θ) / l
+   *
+   * ⚠ 这里的负号与 crankPin 的负号是同一件事的两面，必须同时成立。
+   *   写成 +r·sinθ 会使大头落在曲柄销的镜像位置，偏差 2r·|sinθ| ——
+   *   而该偏差在 θ 为 180° 整数倍时恰好为零，所以静止姿态看起来完全正常。
    */
   function rodRotationZ(theta) {
     const r = CONFIG.crankRadius;
     const l = CONFIG.rodLength;
     const s = Math.sin(theta);
-    return Math.atan2(r * s, Math.sqrt(l * l - r * r * s * s));
+    return Math.atan2(-r * s, Math.sqrt(l * l - r * r * s * s));
   }
 ```
 
@@ -329,7 +353,7 @@ Expected: FAIL —— `crankPin is not a function`。
 - [ ] **Step 4: 运行测试，确认通过**
 
 Run: `npm test`
-Expected: PASS —— 9 个测试全绿。
+Expected: PASS —— 10 个测试全绿。
 
 其中「连杆长度恒定」是关键不变量：它同时约束了 `pistonPosition`、`crankPin` 与符号约定三者是否自洽。若符号写反，这个测试会失败。
 
@@ -497,7 +521,7 @@ Expected: FAIL —— `intakeLift is not a function`。
 - [ ] **Step 4: 运行测试，确认通过**
 
 Run: `npm test`
-Expected: PASS —— 17 个测试全绿。
+Expected: PASS —— 18 个测试全绿。
 
 「气门重叠角恰为 40°」这条会同时抓住升程窗口写宽或写窄、以及开闭角度写反的问题。
 
@@ -1659,7 +1683,7 @@ HUD 实时显示各缸所处冲程与循环角，冲程按四色区分。
 - [ ] **Step 1: 全量单元测试**
 
 Run: `npm test`
-Expected: PASS —— 17 个测试全绿。若有任何一项失败，**先修再继续**。
+Expected: PASS —— 18 个测试全绿。若有任何一项失败，**先修再继续**。
 
 - [ ] **Step 2: 端到端浏览器验收**
 
@@ -1771,7 +1795,7 @@ git commit -m "docs: README 与端到端验收
 
 全部任务完成后应满足：
 
-- [ ] `npm test` 17 项全绿
+- [ ] `npm test` 18 项全绿
 - [ ] 双击 `index.html` 能打开并看到运转中的发动机
 - [ ] 四缸活塞两两同步（1&4、2&3），动作此起彼伏
 - [ ] 连杆两端始终分别咬合在曲柄销与活塞销上，无穿模

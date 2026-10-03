@@ -189,15 +189,25 @@ const KIN = (() => {
 
   /**
    * 连杆绕 Z 轴的旋转角。
-   * 连杆几何沿 +Y 建模（小头在原点，大头在 −Y 端），装配到活塞销后旋转此角。
-   * 推导：世界坐标大头→小头 = (−r·sinθ, +√(l²−r²sin²θ))；
-   *       局部轴向 (0,+1) 旋转 α 得 (−sinα, cosα)，对应对上即可。
+   * 连杆几何：小头在局部原点，大头在局部 (0, −l)。装配到活塞销 (0, s) 后旋转此角。
+   *
+   * 推导：绕 Z 转 α 后 (0, −l) → (l·sinα, −l·cosα)，
+   *       故大头世界坐标 = (l·sinα, s − l·cosα)。
+   *       要求它等于曲柄销 (−r·sinθ, r·cosθ)：
+   *         X: l·sinα = −r·sinθ            ⇒ sinα = −r·sinθ / l
+   *         Y: l·cosα = s − r·cosθ = √(l²−r²sin²θ) ⇒ cosα = √(l²−r²sin²θ) / l
+   *       故 α = atan2(−r·sinθ, √(l²−r²sin²θ))。
+   *
+   * ⚠ 这里的负号与 7.2 中曲柄销 X 的负号是同一件事的两面，必须同时成立。
+   *   若把它写成 +r·sinθ，大头会落在曲柄销的镜像位置，偏差 2r·|sinθ|；
+   *   而该偏差在 θ 为 180° 整数倍时恰好为零 —— 所以静止姿态和任何 180° 倍数处的
+   *   截图检查都看不出问题，只有让曲轴转过一个角度才会暴露。
    */
   function rodRotationZ(theta) {
     const r = CONFIG.crankRadius;
     const l = CONFIG.rodLength;
     const s = Math.sin(theta);
-    return Math.atan2(r * s, Math.sqrt(l * l - r * r * s * s));
+    return Math.atan2(-r * s, Math.sqrt(l * l - r * r * s * s));
   }
 
   /**

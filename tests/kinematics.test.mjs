@@ -56,16 +56,38 @@ test('连杆长度在任意曲轴角下恒定等于 l', () => {
   }
 });
 
-test('连杆姿态：θ=0 竖直，θ=90° 倾斜 +asin(r/l)', () => {
+test('连杆姿态：θ=0 竖直，θ=90° 倾斜 −asin(r/l)', () => {
   assert.ok(Math.abs(rodRotationZ(0)) < 1e-12, `期望 0，实际 ${rodRotationZ(0)}`);
-  const expected = Math.asin(R / L);
+  // 负号：θ=90° 时曲柄销在 −X 侧，大头必须跟着到 −X 侧，故连杆朝负向倾斜
+  const expected = -Math.asin(R / L);
   assert.ok(Math.abs(rodRotationZ(Math.PI / 2) - expected) < 1e-12,
     `期望 ${expected}，实际 ${rodRotationZ(Math.PI / 2)}`);
 });
 
-test('连杆姿态：θ=270° 倾斜 −asin(r/l)（镜像侧）', () => {
-  const expected = -Math.asin(R / L);
+test('连杆姿态：θ=270° 倾斜 +asin(r/l)（镜像侧）', () => {
+  const expected = Math.asin(R / L);
   assert.ok(Math.abs(rodRotationZ(3 * Math.PI / 2) - expected) < 1e-12);
+});
+
+test('连杆大头始终精确咬合在曲柄销上', () => {
+  // 这是全篇唯一直接校验「连杆 3D 姿态」的断言。
+  // 其余测试只验证纯函数之间自洽，看不见 rodRotationZ 的符号；
+  // 而符号错误造成的偏差是 2r·|sinθ|，在 θ 为 180° 整数倍时恰好为 0，
+  // 因此任何在静止姿态或 180° 倍数处做的截图检查都会漏掉它。
+  for (let d = 0; d < 720; d += 15) {
+    const th = d * Math.PI / 180;
+    const s = pistonPosition(th);          // 活塞销 Y（连杆组的挂载点）
+    const pin = crankPin(th);              // 曲柄销世界坐标
+    const a = rodRotationZ(th);            // 连杆绕 Z 的旋转角
+    // 连杆几何：小头在局部原点，大头在局部 (0, −l)。
+    // 绕 Z 转 a 后 (0,−l) → (l·sin a, −l·cos a)，再叠加挂载点 (0, s)。
+    const bigEndX = L * Math.sin(a);
+    const bigEndY = s - L * Math.cos(a);
+    const gap = Math.hypot(bigEndX - pin.x, bigEndY - pin.y);
+    assert.ok(gap < 1e-9,
+      `θ=${d}° 大头 (${bigEndX.toFixed(4)}, ${bigEndY.toFixed(4)}) ` +
+      `与曲柄销 (${pin.x.toFixed(4)}, ${pin.y.toFixed(4)}) 相距 ${gap.toFixed(4)}`);
+  }
 });
 
 test('进气门升程峰值落在进气冲程中点 90°', () => {
