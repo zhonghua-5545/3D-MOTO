@@ -657,8 +657,60 @@ const KIN = (() => {
       labelRenderer.render(scene, camera);
     }
 
-    // updateHud 在 Task 9 实现；先占位以免本任务报错
-    function updateHud() {}
+    // ---------- HUD ----------
+    const STROKE_COLOR = { '进气': '#58a6ff', '压缩': '#d29922', '做功': '#f85149', '排气': '#8b949e' };
+
+    const hudRows = engine.units.map((u) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<span class="cyl">缸 ${u.index + 1}</span>
+                       <span class="stroke"></span>
+                       <span class="angle"></span>`;
+      document.getElementById('hud').appendChild(row);
+      return { stroke: row.querySelector('.stroke'), angle: row.querySelector('.angle') };
+    });
+
+    function updateHud() {
+      for (const u of engine.units) {
+        const cyc = KIN.cycleAngle(state.crankDeg, u.index);
+        const name = KIN.strokeAt(cyc);
+        const r = hudRows[u.index];
+        r.stroke.textContent = name;
+        r.stroke.style.color = STROKE_COLOR[name];
+        r.angle.textContent = `${Math.round(KIN.wrap720(cyc))}°`;
+      }
+      document.getElementById('crank-readout').textContent =
+        `曲轴角 ${Math.round(state.crankDeg)}°`;
+    }
+
+    // ---------- 3D 部件标签 ----------
+    function buildLabels(eng) {
+      /** 在指定局部位置挂一个 CSS2D 标签 */
+      function tag(parent, text, pos) {
+        const el = document.createElement('div');
+        el.className = 'label';
+        el.textContent = text;
+        const obj = new CSS2DObject(el);
+        obj.position.copy(pos);
+        parent.add(obj);
+        return obj;
+      }
+
+      // 曲轴与飞轮
+      tag(eng.crankshaft, '曲轴', new THREE.Vector3(0, -crankRadius * 2.4, 0));
+      tag(eng.flywheel, '飞轮', new THREE.Vector3(0, bore * 1.5, 0));
+
+      // 只在第一缸标注内部零件，避免四组标签互相压叠
+      const u0 = eng.units[0];
+      tag(u0.piston, '活塞', new THREE.Vector3(0, pistonHeight * 0.6, 0));
+      tag(u0.rod, '连杆', new THREE.Vector3(0, -rodLength * 0.5, 0));
+      // 两个气门本身只相差 x/z 偏移，标签投影后几乎重合，故纵向错开
+      tag(u0.intake, '进气门', new THREE.Vector3(0, 1.7, 0));
+      tag(u0.exhaust, '排气门', new THREE.Vector3(0, 0.6, 0));
+    }
+
+    buildLabels(engine);
+    updateHud();
 
     renderer.setAnimationLoop(render);
 
