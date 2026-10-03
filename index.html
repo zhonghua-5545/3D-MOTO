@@ -41,10 +41,16 @@
     border: 1px solid var(--border);
     color: var(--fg); font-size: 11px; white-space: nowrap;
   }
-  #hud {
-    position: fixed; top: 14px; left: 14px;
-    display: flex; flex-direction: column; gap: 6px;
+  /* 顶栏：HUD 在左、曲轴角读数在右。放不下时读数换行到下一排，
+     避免窄窗口下两者重叠（原先两者各自 fixed 定位，宽度之和尚且不够时会叠在一起）。 */
+  #topbar {
+    position: fixed; top: 14px; left: 14px; right: 14px;
+    display: flex; justify-content: space-between;
+    align-items: flex-start; flex-wrap: wrap; gap: 8px;
     pointer-events: none;
+  }
+  #hud {
+    display: flex; flex-direction: column; gap: 6px;
   }
   #hud .row {
     display: flex; align-items: center; gap: 8px;
@@ -54,7 +60,7 @@
   }
   #hud .row .cyl { color: var(--muted); }
   #hud .row .stroke { font-weight: 600; min-width: 3em; }
-  .crank { position: fixed; top: 14px; right: 14px;
+  .crank {
     padding: 5px 10px; border-radius: 6px;
     background: var(--panel); border: 1px solid var(--border);
     font-variant-numeric: tabular-nums; }
@@ -79,13 +85,17 @@
   }
   #boot-error {
     position: fixed; inset: 0; display: flex; z-index: 10;
-    align-items: center; justify-content: center;
     background: var(--bg);
+    overflow-y: auto;              /* 矮窗口下可滚动，而不是把下半截内容裁掉 */
+    padding: 20px;
   }
   #boot-error[hidden] { display: none; }
   #boot-error .box {
     max-width: 560px; padding: 26px 30px; border-radius: 12px;
     background: var(--panel); border: 1px solid var(--border);
+    /* 用 margin:auto 而非 align-items:center 做居中：
+       后者在内容高于容器时会把溢出部分裁掉且滚不上去，前者会自然顶到上边并可滚动。 */
+    margin: auto;
   }
   #boot-error h1 { margin: 0 0 12px; font-size: 17px; color: #f85149; }
   #boot-error p { margin: 0 0 10px; }
@@ -100,8 +110,10 @@
   <div id="app"></div>
   <div id="labels"></div>
 
-  <div id="hud"></div>
-  <div class="crank" id="crank-readout">曲轴角 0°</div>
+  <div id="topbar">
+    <div id="hud"></div>
+    <div class="crank" id="crank-readout">曲轴角 0°</div>
+  </div>
 
   <div id="panel">
     <label>转速
@@ -502,6 +514,7 @@ const KIN = (() => {
       g.userData.height = h;
       g.userData.intake = intake;
       g.userData.exhaust = exhaust;
+      g.userData.plug = plug;
       // 气门是缸盖 Group 的子节点，其 position 是相对缸盖的【局部】坐标。
       // 姿态计算必须以这个基准值偏移，绝不能用缸盖的世界 Y——那会把气门推到天上。
       g.userData.intakeBaseY = intake.position.y;
@@ -559,6 +572,7 @@ const KIN = (() => {
           index: i, z, piston, rod, liner, head,
           intake: head.userData.intake,
           exhaust: head.userData.exhaust,
+          plug: head.userData.plug,
           intakeBaseY: head.userData.intakeBaseY,
           exhaustBaseY: head.userData.exhaustBaseY,
         });
@@ -644,9 +658,23 @@ const KIN = (() => {
       dtClamp: 0.1,      // 秒。标签页切回时防止角度暴跳
     };
 
-    const clock = new THREE.Clock();
+    // three r186 起 Timer 已进核心，Clock 已废弃。
+    // 与 Clock 不同，Timer 需要每帧显式 update() 来推进 delta。
+    const timer = new THREE.Timer();
 
-    Object.assign(window.__debug, { state, clock });
+    /**
+     * 单帧时间上限钳制。
+     * 标签页切到后台再切回时累积的帧间隔可达数秒 —— 不钳制的话曲轴角会瞬间
+     * 推进数十万度（绕数百圈），视觉上就是随机瞬移。
+     *
+     * 单独抽成具名函数并挂到 __debug，是为了让验证能直接调用它，
+     * 而不必像依赖 Clock 时那样去改计时器的半私有字段 clock.oldTime。
+     */
+    function frameDelta(rawDt) {
+      return Math.min(rawDt, state.dtClamp);
+    }
+
+    Object.assign(window.__debug, { state, timer, frameDelta });
 
     function advance(dtSec) {
       if (state.paused || state.rpm <= 0) return;
@@ -657,9 +685,8 @@ const KIN = (() => {
 
     // ---------- 主循环 ----------
     function render() {
-      // 上限钳制：标签页切到后台再切回时 getDelta 可能返回数秒
-      const dt = Math.min(clock.getDelta(), state.dtClamp);
-      advance(dt);
+      timer.update();
+      advance(frameDelta(timer.getDelta()));
       applyPose(engine, state.crankDeg);
       updateHud();
       controls.update();
@@ -721,9 +748,13 @@ const KIN = (() => {
       const u0 = eng.units[0];
       tag(u0.piston, '活塞', new THREE.Vector3(0, pistonHeight * 0.6, 0));
       tag(u0.rod, '连杆', new THREE.Vector3(0, -rodLength * 0.5, 0));
-      // 两个气门本身只相差 x/z 偏移，标签投影后几乎重合，故纵向错开
-      tag(u0.intake, '进气门', new THREE.Vector3(0, 1.7, 0));
-      tag(u0.exhaust, '排气门', new THREE.Vector3(0, 0.6, 0));
+      // 两个气门在缸盖上只相差 x/z 偏移，投影到屏幕上非常近，标签会叠在一起。
+      // 实测需拉开约 3.4 单位才不重叠（只差 1.1 时仍会压叠）。
+      tag(u0.intake, '进气门', new THREE.Vector3(0, 3.2, 0));
+      tag(u0.exhaust, '排气门', new THREE.Vector3(0, -0.2, 0));
+
+      // 火花塞在缸盖正中、顶端露出盖外，标签放在其上方，避开两个气门标签
+      tag(u0.plug, '火花塞', new THREE.Vector3(0, 3.4, 0));
     }
 
     buildLabels(engine);
