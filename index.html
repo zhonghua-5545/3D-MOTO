@@ -589,6 +589,43 @@ const KIN = (() => {
     frameObject(engine.root);
     Object.assign(window.__debug, { frameObject, engine, applyPose, buildEngine });
 
+    // ---------- 剖切与半透明 ----------
+    // 沿 X 方向的平面，切掉靠观察者一侧的缸壁
+    const cutPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), bore * 0.30);
+
+    const CLIP_NONE = [];
+    const CLIP_CUT = [cutPlane];
+
+    let cutOn = true;
+    let ghostOn = false;
+
+    /**
+     * 四个缸共用同一批材质实例，所以直接改材质即可，无需逐网格遍历。
+     * 只有缸套与缸盖外壳需要被剖切/透明化；气门、火花塞保持自身材质不透明。
+     */
+    function refreshShellMaterials() {
+      MAT.glass.clippingPlanes = cutOn ? CLIP_CUT : CLIP_NONE;
+      MAT.glass.transparent = true;
+      MAT.glass.opacity = ghostOn ? 0.5 : 0.14;
+      MAT.glass.depthWrite = false;        // 半透明体不写深度，避免内部零件被错误遮挡
+      MAT.glass.needsUpdate = true;
+
+      MAT.head.clippingPlanes = cutOn ? CLIP_CUT : CLIP_NONE;
+      MAT.head.transparent = ghostOn;
+      MAT.head.opacity = ghostOn ? 0.35 : 1;
+      MAT.head.depthWrite = !ghostOn;      // 恢复完全不透明时必须重新写深度
+      MAT.head.needsUpdate = true;
+
+      renderer.localClippingEnabled = cutOn;
+    }
+
+    function setCut(enabled) { cutOn = enabled; refreshShellMaterials(); }
+    function setGhost(enabled) { ghostOn = enabled; refreshShellMaterials(); }
+
+    refreshShellMaterials();
+
+    Object.assign(window.__debug, { setCut, setGhost, cutPlane, MAT });
+
     // ---------- 状态 ----------
     const state = {
       crankDeg: 0,
@@ -624,6 +661,21 @@ const KIN = (() => {
     function updateHud() {}
 
     renderer.setAnimationLoop(render);
+
+    // ---------- UI 接线 ----------
+    const $ = (id) => document.getElementById(id);
+
+    $('cut').addEventListener('click', (e) => {
+      const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+      e.currentTarget.setAttribute('aria-pressed', String(on));
+      setCut(on);
+    });
+
+    $('ghost').addEventListener('click', (e) => {
+      const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+      e.currentTarget.setAttribute('aria-pressed', String(on));
+      setGhost(on);
+    });
   </script>
 </body>
 </html>
