@@ -4,7 +4,8 @@ import { loadKIN } from './extract.mjs';
 
 const KIN = loadKIN();
 const { CONFIG, pistonPosition, crankPin, rodRotationZ,
-        intakeLift, exhaustLift, strokeAt, cycleAngle, firingOrder, wrap720 } = KIN;
+        intakeLift, exhaustLift, strokeAt, cycleAngle, firingOrder, wrap720,
+        ignitionFlash } = KIN;
 const R = CONFIG.crankRadius;
 const L = CONFIG.rodLength;
 
@@ -154,4 +155,41 @@ test('点火间隔均匀为 180°', () => {
   const gaps = CONFIG.phase.map((p) => wrap720(360 - p)).sort((a, b) => a - b);
   const diffs = gaps.slice(1).map((v, i) => v - gaps[i]);
   assert.deepEqual(diffs, [180, 180, 180]);
+});
+
+test('点火闪光峰值精确落在做功冲程起点 360°', () => {
+  assert.equal(ignitionFlash(360), 1);
+  assert.equal(strokeAt(360), '做功', '峰值必须落在做功冲程起点');
+  // 偏离峰值应单调衰减
+  let prev = 1;
+  for (let off = 1; off < 45; off++) {
+    const v = ignitionFlash(360 + off);
+    assert.ok(v < prev, `偏移 ${off}° 处未衰减`);
+    prev = v;
+  }
+});
+
+test('点火闪光在窗口外精确为 0', () => {
+  assert.equal(ignitionFlash(360 + 45), 0);
+  assert.equal(ignitionFlash(360 - 45), 0);
+  assert.equal(ignitionFlash(0), 0);
+  assert.equal(ignitionFlash(90), 0, '进气冲程中点不应有闪光');
+  assert.equal(ignitionFlash(180), 0);
+  assert.equal(ignitionFlash(540), 0);
+});
+
+test('点火闪光在一个 720° 循环内只出现一次', () => {
+  let peaks = 0;
+  for (let d = 0; d < 720; d++) if (ignitionFlash(d) >= 1 - 1e-12) peaks++;
+  assert.equal(peaks, 1, '四冲程循环每缸只点火一次；出现多次说明包络在环绕处断裂');
+});
+
+test('点火闪光关于 360° 左右对称且环绕连续', () => {
+  for (let off = 1; off < 45; off++) {
+    assert.ok(Math.abs(ignitionFlash(360 + off) - ignitionFlash(360 - off)) < 1e-12,
+      `偏移 ±${off}° 处不对称`);
+  }
+  // 窗口两端的极限应趋近 0，否则角度推进时会出现跳变
+  assert.ok(ignitionFlash(360 + 44.99) < 0.01);
+  assert.ok(ignitionFlash(360 - 44.99) < 0.01);
 });

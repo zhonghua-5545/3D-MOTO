@@ -83,6 +83,9 @@
   #panel button[aria-pressed="true"] {
     background: var(--accent); border-color: var(--accent); color: #0d1117;
   }
+  #panel .jump { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  #panel .jump-label { color: var(--muted); }
+  #panel .jump-btn { padding: 4px 8px; font-size: 12px; }
   #boot-error {
     position: fixed; inset: 0; display: flex; z-index: 10;
     background: var(--bg);
@@ -126,6 +129,14 @@
     <button id="ghost" aria-pressed="false">半透明</button>
     <button id="labels-toggle" aria-pressed="true">标签</button>
     <button id="reset">重置视角</button>
+
+    <span class="jump">
+      <span class="jump-label">1 缸跳转</span>
+      <button class="jump-btn" data-stroke="0">进气</button>
+      <button class="jump-btn" data-stroke="1">压缩</button>
+      <button class="jump-btn" data-stroke="2">做功</button>
+      <button class="jump-btn" data-stroke="3">排气</button>
+    </span>
   </div>
 
   <div id="boot-error" hidden>
@@ -175,6 +186,7 @@ const KIN = (() => {
     intake:  { open: 700, duration: 220 },
     exhaust: { open: 520, duration: 220 },
     maxLift: 0.8,
+    ignitionWindow: 45,   // 点火闪光半宽（度）
   };
 
   /** 角度归一到 [0, 720) */
@@ -259,8 +271,25 @@ const KIN = (() => {
       .map((f) => f.cyl);
   }
 
+  /**
+   * 点火闪光强度（0–1）。做功冲程起点（循环角 360°）处达到峰值。
+   *
+   * 用余弦平方包络：中心为 1、窗口边缘为 0 且一阶导连续，因此曲轴角推进时
+   * 不会有亮度跳变。窗口半宽 45°，900 RPM 下约 83ms；转速越高闪光越短促 ——
+   * 这正是真实点火该有的频闪感，也是它作为「时刻」而非「区间」提示的意义。
+   */
+  function ignitionFlash(cycleDeg) {
+    // 距点火点的有符号偏移，折到 (−360, 360]
+    let off = wrap720(cycleDeg - 360);
+    if (off > 360) off -= CYCLE_DEG;
+    const u = Math.abs(off) / CONFIG.ignitionWindow;
+    if (u >= 1) return 0;
+    const c = Math.cos(u * Math.PI / 2);
+    return c * c;
+  }
+
   return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition, crankPin, rodRotationZ,
-           intakeLift, exhaustLift, strokeAt, cycleAngle, firingOrder };
+           intakeLift, exhaustLift, strokeAt, cycleAngle, firingOrder, ignitionFlash };
 })();
   </script>
 
@@ -511,7 +540,30 @@ const KIN = (() => {
       plug.position.y = h * 0.75;
       g.add(plug);
 
+      // 点火闪光：置于缸盖底面稍下方，即燃烧室内。
+      // 由「球 + 点光源」两层组成 —— 只放一个加色小球的话，在浅色缸套前
+      // 只是一团淡黄，谈不上「清楚看到」；点光源让周围金属真的被照亮才是关键。
+      // 每个缸必须各自 new 一份，共用会让四个缸同时亮灭。
+      const flash = new THREE.Group();
+      // 球体在 applyPose 里被沿 Y 压扁成椭球，去填活塞顶与缸盖底之间那道
+      // 燃烧室空间 —— 正球体要么被活塞顶穿、要么太小看不见。
+      const fCore = new THREE.Mesh(
+        new THREE.SphereGeometry(bore * 0.46, 20, 14),
+        new THREE.MeshBasicMaterial({
+          color: 0xfff0c4, transparent: true, opacity: 0,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+      );
+      flash.add(fCore);
+      const fLight = new THREE.PointLight(0xffc46b, 0, 34, 2);
+      flash.add(fLight);
+      flash.position.y = -0.62;
+      flash.visible = false;
+      flash.userData = { core: fCore, light: fLight };
+      g.add(flash);
+
       g.userData.height = h;
+      g.userData.flash = flash;
       g.userData.intake = intake;
       g.userData.exhaust = exhaust;
       g.userData.plug = plug;
@@ -573,6 +625,7 @@ const KIN = (() => {
           intake: head.userData.intake,
           exhaust: head.userData.exhaust,
           plug: head.userData.plug,
+          flash: head.userData.flash,
           intakeBaseY: head.userData.intakeBaseY,
           exhaustBaseY: head.userData.exhaustBaseY,
         });
@@ -605,6 +658,15 @@ const KIN = (() => {
         // 不是缸盖的世界 Y —— 气门是缸盖的子节点。
         u.intake.position.y = u.intakeBaseY - KIN.intakeLift(cyc) * CONFIG.maxLift;
         u.exhaust.position.y = u.exhaustBaseY - KIN.exhaustLift(cyc) * CONFIG.maxLift;
+
+        // 点火闪光：仅在做功冲程起点附近亮起。
+        // 隐藏时直接 visible=false，省掉一次无谓的透明体绘制。
+        const f = KIN.ignitionFlash(cyc);
+        u.flash.visible = f > 0.001;
+        u.flash.userData.core.material.opacity = f;
+        u.flash.userData.light.intensity = f * 320;
+        const fScale = 0.72 + 0.28 * f;           // 注意勿命名为 s：本函数里 s 已是活塞位移
+        u.flash.scale.set(fScale, fScale * 0.42, fScale);   // 压扁成椭球，贴合燃烧室形状
       }
     }
 
@@ -803,6 +865,22 @@ const KIN = (() => {
     $('pause').addEventListener('click', () => setPaused(!state.paused));
     $('step').addEventListener('click', () => stepBy(15));
     $('reset').addEventListener('click', resetView);
+
+    /**
+     * 把 1 缸直接跳到指定冲程的起点，便于逐个冲程细看。
+     * 该缸循环角应为 180°×index（进气 0 / 压缩 180 / 做功 360 / 排气 540），
+     * 而 循环角 = crankDeg + phase[0]，反解即得下面的式子。
+     * 与其他定位操作一致：先暂停，否则下一帧就转走了。
+     */
+    document.querySelectorAll('.jump-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const index = Number(btn.dataset.stroke);
+        setPaused(true);
+        state.crankDeg = KIN.wrap720(index * 180 - CONFIG.phase[0]);
+        applyPose(engine, state.crankDeg);
+        updateHud();
+      });
+    });
 
     $('labels-toggle').addEventListener('click', (e) => {
       const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
