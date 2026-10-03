@@ -256,6 +256,25 @@ const KIN = (() => {
 
     const { CONFIG, DEG } = KIN;       // 来自上方 <script id="kinematics"> 的全局词法绑定
 
+    // ---------- 材质 ----------
+    const MAT = {
+      steel: new THREE.MeshStandardMaterial({ color: 0x9aa4b2, metalness: 0.95, roughness: 0.22 }),
+      crank: new THREE.MeshStandardMaterial({ color: 0x6f7885, metalness: 0.95, roughness: 0.3 }),
+      rod:   new THREE.MeshStandardMaterial({ color: 0xb8c0cc, metalness: 0.9,  roughness: 0.28 }),
+      piston:new THREE.MeshStandardMaterial({ color: 0xd8dee9, metalness: 0.85, roughness: 0.38 }),
+      ring:  new THREE.MeshStandardMaterial({ color: 0x2b3138, metalness: 0.8,  roughness: 0.5 }),
+      valveIn:  new THREE.MeshStandardMaterial({ color: 0x4d9fe8, metalness: 0.9, roughness: 0.25 }),
+      valveEx:  new THREE.MeshStandardMaterial({ color: 0xe0704d, metalness: 0.9, roughness: 0.25 }),
+      plug:  new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.95, roughness: 0.3 }),
+      // 缸体：半透明由 Task 7 控制 opacity/transparent
+      glass: new THREE.MeshPhysicalMaterial({
+        color: 0x7fa6d0, metalness: 0.0, roughness: 0.08,
+        transparent: true, opacity: 0.14, side: THREE.DoubleSide,
+        depthWrite: false, transmission: 0.0,
+      }),
+      head: new THREE.MeshStandardMaterial({ color: 0x59616d, metalness: 0.9, roughness: 0.35 }),
+    };
+
     // ---------- 渲染器 ----------
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -276,9 +295,8 @@ const KIN = (() => {
 
     const camera = new THREE.PerspectiveCamera(
       42, window.innerWidth / window.innerHeight, 0.5, 400);
-    const HOME_POS = new THREE.Vector3(34, 20, 34);
-    const HOME_TARGET = new THREE.Vector3(0, 10, 0);
-    camera.position.copy(HOME_POS);
+    camera.position.set(34, 20, 34);   // 占位；装配完成后由 frameObject 依包围盒精确摆放
+    const VIEW_DIR = new THREE.Vector3(1, 0.42, 1).normalize();   // 默认观察方向
 
     // ---------- 环境光照 ----------
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -291,12 +309,31 @@ const KIN = (() => {
 
     // ---------- 控制器 ----------
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.copy(HOME_TARGET);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.minDistance = 6;
-    controls.maxDistance = 160;
+    controls.maxDistance = 260;
     controls.update();
+
+    /**
+     * 把相机摆到能完整框住 target 的位置。
+     * 取垂直/水平半视角中的较小者来算距离，因此宽屏与窄屏都不裁切
+     * （窄窗口下水平方向才是限制项）。margin 留一点边距。
+     */
+    function frameObject(target, margin = 1.15) {
+      const box = new THREE.Box3().setFromObject(target);
+      if (box.isEmpty()) return;
+      const center = box.getCenter(new THREE.Vector3());
+      const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
+
+      const halfV = THREE.MathUtils.degToRad(camera.fov) / 2;
+      const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+      const dist = (radius * margin) / Math.sin(Math.min(halfV, halfH));
+
+      camera.position.copy(center).addScaledVector(VIEW_DIR, dist);
+      controls.target.copy(center);
+      controls.update();
+    }
 
     // ---------- 调试接口 ----------
     // 模块作用域的绑定在 page.evaluate 与控制台里都不可见（模块作用域不是全局作用域），
@@ -314,13 +351,183 @@ const KIN = (() => {
     }
     window.addEventListener('resize', resize);
 
-    // ---------- 临时内容：占位立方体，Task 5–6 会替换为发动机 ----------
-    const placeholder = new THREE.Mesh(
-      new THREE.BoxGeometry(10, 10, 10),
-      new THREE.MeshStandardMaterial({ color: 0x58a6ff, metalness: 0.9, roughness: 0.25 })
-    );
-    placeholder.position.set(0, 10, 0);
-    scene.add(placeholder);
+    // ---------- 零件构建器 ----------
+    const { bore, crankRadius, rodLength, boreSpacing,
+            pistonHeight, pistonRadius } = CONFIG;
+
+    /** 曲轴：主轴 + 每缸曲柄臂 + 曲柄销。局部原点在轴心，主轴沿 Z，曲柄销在 θ=0 时指向 +Y */
+    function buildCrankshaft() {
+      const g = new THREE.Group();
+      const halfLen = (CONFIG.cylinders - 1) * boreSpacing / 2 + boreSpacing * 0.7;
+
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(crankRadius * 0.42, crankRadius * 0.42, halfLen * 2, 28),
+        MAT.crank);
+      shaft.rotation.x = Math.PI / 2;                 // 圆柱默认沿 Y，转到沿 Z
+      g.add(shaft);
+
+      for (let i = 0; i < CONFIG.cylinders; i++) {
+        const z = (i - (CONFIG.cylinders - 1) / 2) * boreSpacing;
+        const ang = CONFIG.phase[i] * DEG;             // 各缸曲柄方向
+        // 曲柄臂
+        for (const dz of [-0.45, 0.45]) {
+          const web = new THREE.Mesh(
+            new THREE.BoxGeometry(crankRadius * 1.5, crankRadius * 2.1, 0.75), MAT.crank);
+          web.position.set(0, 0, z + dz);
+          web.rotation.z = ang;
+          // 臂身从轴心伸向销，故把几何沿 +Y 偏移半个半径
+          web.translateY(crankRadius * 0.5);
+          g.add(web);
+        }
+        // 曲柄销：本缸相位角 ang 直接算进位置。
+        // 曲轴 Group 再叠加 rotation.z = crankAngle 后，销的世界坐标为
+        //   (−r·sin(ang + crankAngle), r·cos(ang + crankAngle))
+        // 即 cycleAngle 对应的位置。
+        // 注意：不可用 rotateOnWorldAxis —— 它只改朝向、不改位置，销会留在 (0, +r) 不动。
+        const pin = new THREE.Mesh(
+          new THREE.CylinderGeometry(crankRadius * 0.34, crankRadius * 0.34, 1.5, 20), MAT.crank);
+        pin.rotation.x = Math.PI / 2;                    // 圆柱默认沿 Y，转到沿 Z
+        pin.position.set(-crankRadius * Math.sin(ang), crankRadius * Math.cos(ang), z);
+        g.add(pin);
+      }
+      return g;
+    }
+
+    /** 连杆：小头在原点，杆身沿 −Y 延伸到 (0, −rodLength, 0) 处的大头 */
+    function buildConnectingRod() {
+      const g = new THREE.Group();
+      const rodW = crankRadius * 0.34;
+
+      const beam = new THREE.Mesh(
+        new THREE.BoxGeometry(rodW, rodLength, rodW * 1.25), MAT.rod);
+      beam.position.y = -rodLength / 2;
+      g.add(beam);
+
+      // Torus 的主环落在 XY 平面、管沿 Z 鼓出，环孔轴向本就是 Z，
+      // 与活塞销/曲柄销同向，因此不需要任何旋转。
+      const smallEnd = new THREE.Mesh(
+        new THREE.TorusGeometry(crankRadius * 0.34, rodW * 0.34, 10, 22), MAT.rod);
+      g.add(smallEnd);
+
+      const bigEnd = new THREE.Mesh(
+        new THREE.TorusGeometry(crankRadius * 0.62, rodW * 0.4, 12, 26), MAT.rod);
+      bigEnd.position.y = -rodLength;
+      g.add(bigEnd);
+
+      return g;
+    }
+
+    /** 活塞：活塞销中心在原点 */
+    function buildPiston() {
+      const g = new THREE.Group();
+
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(pistonRadius, pistonRadius, pistonHeight, 32), MAT.piston);
+      body.position.y = pistonHeight * 0.18;           // 销略偏下，靠近裙部
+      g.add(body);
+
+      for (let k = 0; k < 3; k++) {
+        const ring = new THREE.Mesh(
+          new THREE.CylinderGeometry(pistonRadius * 1.015, pistonRadius * 1.015, 0.22, 32), MAT.ring);
+        ring.position.y = pistonHeight * 0.18 + pistonHeight * 0.42 - k * 0.46;
+        g.add(ring);
+      }
+
+      const wristPin = new THREE.Mesh(
+        new THREE.CylinderGeometry(crankRadius * 0.3, crankRadius * 0.3,
+                                   pistonRadius * 1.7, 20), MAT.steel);
+      wristPin.rotation.x = Math.PI / 2;
+      g.add(wristPin);
+
+      return g;
+    }
+
+    /** 缸套：原点在底端中心，沿 +Y 向上 */
+    function buildCylinderLiner() {
+      const height = CONFIG.stroke + pistonHeight + crankRadius * 2.4;
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(bore / 2, bore / 2, height, 36, 1, true), MAT.glass);
+      mesh.position.y = height / 2;
+      const g = new THREE.Group();
+      g.add(mesh);
+      g.userData.height = height;
+      return g;
+    }
+
+    /** 缸盖：含两个气门与火花塞。气门几何沿 −Y 为「开启」方向 */
+    function buildCylinderHead() {
+      const g = new THREE.Group();
+      const h = bore * 0.62;
+
+      const shell = new THREE.Mesh(new THREE.BoxGeometry(bore * 1.5, h, bore * 1.5), MAT.head);
+      shell.position.y = h / 2;
+      g.add(shell);
+
+      /** 单个气门：气门头在局部原点下方，杆沿 +Y 向上 */
+      function makeValve(mat) {
+        const v = new THREE.Group();
+        const head = new THREE.Mesh(
+          new THREE.CylinderGeometry(bore * 0.24, bore * 0.20, 0.3, 20), mat);
+        v.add(head);
+        const stem = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.16, 0.16, h * 0.95, 12), mat);
+        stem.position.y = h * 0.48;
+        v.add(stem);
+        return v;
+      }
+
+      const intake = makeValve(MAT.valveIn);
+      intake.position.set(-bore * 0.3, 0, -bore * 0.24);
+      g.add(intake);
+
+      const exhaust = makeValve(MAT.valveEx);
+      exhaust.position.set(bore * 0.3, 0, bore * 0.24);
+      g.add(exhaust);
+
+      const plug = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.38, 0.28, h * 0.9, 14), MAT.plug);
+      plug.position.y = h * 0.75;
+      g.add(plug);
+
+      g.userData.height = h;
+      g.userData.intake = intake;
+      g.userData.exhaust = exhaust;
+      return g;
+    }
+
+    /** 飞轮：原点在轮心，盘面垂直于 Z */
+    function buildFlywheel() {
+      const g = new THREE.Group();
+      const disc = new THREE.Mesh(
+        new THREE.CylinderGeometry(bore * 1.35, bore * 1.35, 0.9, 44), MAT.steel);
+      disc.rotation.x = Math.PI / 2;
+      g.add(disc);
+
+      const teeth = new THREE.Mesh(
+        new THREE.TorusGeometry(bore * 1.38, 0.26, 8, 60), MAT.crank);
+      g.add(teeth);
+      return g;
+    }
+
+    // ---------- 临时静态装配（Task 6 会重构为正式装配） ----------
+    const demoCrank = buildCrankshaft();
+    scene.add(demoCrank);
+    for (let i = 0; i < CONFIG.cylinders; i++) {
+      const z = (i - (CONFIG.cylinders - 1) / 2) * boreSpacing;
+      const s = KIN.pistonPosition(KIN.cycleAngle(0, i) * DEG);
+      const piston = buildPiston();   piston.position.set(0, s, z);  scene.add(piston);
+      const rod = buildConnectingRod();
+      rod.position.set(0, s, z);
+      rod.rotation.z = KIN.rodRotationZ(KIN.cycleAngle(0, i) * DEG);
+      scene.add(rod);
+      const liner = buildCylinderLiner(); liner.position.set(0, 0, z); scene.add(liner);
+      const head = buildCylinderHead();
+      head.position.set(0, liner.userData.height, z);                  scene.add(head);
+    }
+    scene.add(buildFlywheel());
+
+    frameObject(scene);
+    Object.assign(window.__debug, { frameObject });
 
     // ---------- 主循环 ----------
     function render() {
