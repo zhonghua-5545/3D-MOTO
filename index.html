@@ -706,9 +706,16 @@ const KIN = (() => {
         return obj;
       }
 
-      // 曲轴与飞轮
-      tag(eng.crankshaft, '曲轴', new THREE.Vector3(0, -crankRadius * 2.4, 0));
-      tag(eng.flywheel, '飞轮', new THREE.Vector3(0, bore * 1.5, 0));
+      // 曲轴与飞轮。
+      // 这两个标签必须挂在 eng.root（不旋转）上：crankshaft 与 flywheel 两个组都由
+      // rotation.z 驱动，挂在其下的标签会随曲轴一起绕轴心公转。实测一个循环内
+      // 「曲轴」摆动 20.6 单位、「飞轮」摆动 25.8 单位（整机总宽才 24），
+      // 标签会甩到部件外面，看起来像在指别的零件。
+      //
+      // 对照：活塞/连杆标签挂在各自部件上是正确的 —— 它们随部件平移/摆动，
+      // 摆动幅度（8.6 = 冲程）小于部件自身尺寸，视觉上始终贴着零件。
+      tag(eng.root, '曲轴', new THREE.Vector3(0, -crankRadius * 2.4, 0));
+      tag(eng.root, '飞轮', new THREE.Vector3(0, bore * 1.5, eng.flywheel.position.z));
 
       // 只在第一缸标注内部零件，避免四组标签互相压叠
       const u0 = eng.units[0];
