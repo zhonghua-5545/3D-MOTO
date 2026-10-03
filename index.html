@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>直列四缸发动机 · 运行动画</title>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!--
+    运动学块：纯函数，不依赖 DOM 与 Three.js。
+    被 Node 测试脚本从本文件源码中抽取求值，因此测试跑的就是交付的这份代码。
+    切勿把 Three.js 或 DOM 相关代码放进这个块。
+  -->
+  <script id="kinematics">
+const KIN = (() => {
+  const DEG = Math.PI / 180;
+  const CYCLE_DEG = 720;
+
+  const CONFIG = {
+    cylinders: 4,
+    bore: 8.6,            // 缸径
+    stroke: 8.6,          // 冲程
+    crankRadius: 4.3,     // stroke / 2
+    rodLength: 14.3,      // 连杆长度
+    boreSpacing: 10.5,    // 缸心距
+    pistonHeight: 5.0,
+    pistonRadius: 4.25,   // bore/2 略减，留出缸壁间隙
+    phase: [360, 540, 180, 0],       // 对应缸 1..4，度
+    intake:  { open: 700, duration: 220 },
+    exhaust: { open: 520, duration: 220 },
+    maxLift: 0.8,
+  };
+
+  /** 角度归一到 [0, 720) */
+  const wrap720 = (d) => ((d % CYCLE_DEG) + CYCLE_DEG) % CYCLE_DEG;
+
+  /** 活塞销沿 Y 轴距曲轴中心的距离。θ=0 为上止点 */
+  function pistonPosition(theta) {
+    const r = CONFIG.crankRadius;
+    const l = CONFIG.rodLength;
+    const s = Math.sin(theta);
+    return r * Math.cos(theta) + Math.sqrt(l * l - r * r * s * s);
+  }
+
+  return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition };
+})();
+  </script>
+</body>
+</html>

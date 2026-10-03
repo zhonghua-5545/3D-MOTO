@@ -1,0 +1,7 @@
+# Superpowers SDD 工作区（临时产物，非交付内容）
+.superpowers/
+
+# 操作系统
+Thumbs.db
+Desktop.ini
+.DS_Store
