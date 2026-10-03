@@ -676,6 +676,46 @@ const KIN = (() => {
       e.currentTarget.setAttribute('aria-pressed', String(on));
       setGhost(on);
     });
+
+    function setPaused(v) {
+      state.paused = v;
+      $('pause').textContent = v ? '播放' : '暂停';
+      $('pause').setAttribute('aria-pressed', String(v));
+    }
+
+    function stepBy(deg) {
+      setPaused(true);
+      state.crankDeg = ((state.crankDeg + deg) % KIN.CYCLE_DEG + KIN.CYCLE_DEG) % KIN.CYCLE_DEG;
+      applyPose(engine, state.crankDeg);
+      updateHud();
+    }
+
+    function resetView() {
+      frameObject(engine.root);     // 依包围盒重新取景，宽窄屏都不裁切
+    }
+
+    $('rpm').addEventListener('input', (e) => {
+      // RPM = 0 是合法输入：等价于静止，不得产生除零或 NaN
+      state.rpm = Number(e.target.value) || 0;
+      $('rpm-value').textContent = `${state.rpm} RPM`;
+    });
+
+    $('pause').addEventListener('click', () => setPaused(!state.paused));
+    $('step').addEventListener('click', () => stepBy(15));
+    $('reset').addEventListener('click', resetView);
+
+    $('labels-toggle').addEventListener('click', (e) => {
+      const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+      e.currentTarget.setAttribute('aria-pressed', String(on));
+      document.getElementById('labels').style.display = on ? '' : 'none';
+    });
+
+    // 空格键暂停/播放
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !e.repeat) { e.preventDefault(); setPaused(!state.paused); }
+    });
+
+    Object.assign(window.__debug, { setPaused, stepBy, resetView });
   </script>
 </body>
 </html>
