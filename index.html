@@ -68,7 +68,45 @@ const KIN = (() => {
     return Math.atan2(r * s, Math.sqrt(l * l - r * r * s * s));
   }
 
-  return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition, crankPin, rodRotationZ };
+  /**
+   * 气门升程包络（正弦半波，模拟凸轮）。
+   * u 为开启窗口内的归一化进度；u ≤ 0 或 u ≥ 1 时精确返回 0，
+   * 使「完全关闭」是精确的 0 而非 sin(π) ≈ 1.2e-16。
+   */
+  function lift(cycleDeg, window) {
+    const u = wrap720(cycleDeg - window.open) / window.duration;
+    if (u <= 0 || u >= 1) return 0;
+    return Math.sin(Math.PI * u);
+  }
+
+  /** 进气门：700° 开（上止点前 20°），200° 关（下止点后 20°），峰值 90° */
+  const intakeLift = (cycleDeg) => lift(cycleDeg, CONFIG.intake);
+
+  /** 排气门：520° 开（下止点前 20°），740° 关（上止点后 20°），峰值 630° */
+  const exhaustLift = (cycleDeg) => lift(cycleDeg, CONFIG.exhaust);
+
+  const STROKES = ['进气', '压缩', '做功', '排气'];
+
+  /** 由循环角判定所处冲程 */
+  function strokeAt(cycleDeg) {
+    return STROKES[Math.floor(wrap720(cycleDeg) / 180)];
+  }
+
+  /** 第 index 缸（0 起）在给定曲轴角下的循环角 */
+  function cycleAngle(crankDeg, index) {
+    return crankDeg + CONFIG.phase[index];
+  }
+
+  /** 由相位反推点火顺序：某缸点火时 crankAngle = 360° − phase_i */
+  function firingOrder() {
+    return CONFIG.phase
+      .map((p, i) => ({ cyl: i + 1, at: wrap720(360 - p) }))
+      .sort((a, b) => a.at - b.at)
+      .map((f) => f.cyl);
+  }
+
+  return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition, crankPin, rodRotationZ,
+           intakeLift, exhaustLift, strokeAt, cycleAngle, firingOrder };
 })();
   </script>
 </body>
