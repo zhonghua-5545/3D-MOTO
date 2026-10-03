@@ -44,7 +44,31 @@ const KIN = (() => {
     return r * Math.cos(theta) + Math.sqrt(l * l - r * r * s * s);
   }
 
-  return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition };
+  /**
+   * 曲柄销在 XY 平面的位置。
+   * 约定：曲柄销建在曲轴局部 (0, +r)，曲轴 rotation.z = θ（逆时针）。
+   * 因此绕 Z 逆时针旋转 θ 后，X 分量带负号。
+   * 切勿改成 +r·sinθ —— 那会与曲轴旋转方向矛盾，导致连杆朝反侧倾斜。
+   */
+  function crankPin(theta) {
+    const r = CONFIG.crankRadius;
+    return { x: -r * Math.sin(theta), y: r * Math.cos(theta) };
+  }
+
+  /**
+   * 连杆绕 Z 轴的旋转角。
+   * 连杆几何沿 +Y 建模（小头在原点，大头在 −Y 端），装配到活塞销后旋转此角。
+   * 推导：世界坐标大头→小头 = (−r·sinθ, +√(l²−r²sin²θ))；
+   *       局部轴向 (0,+1) 旋转 α 得 (−sinα, cosα)，对应对上即可。
+   */
+  function rodRotationZ(theta) {
+    const r = CONFIG.crankRadius;
+    const l = CONFIG.rodLength;
+    const s = Math.sin(theta);
+    return Math.atan2(r * s, Math.sqrt(l * l - r * r * s * s));
+  }
+
+  return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition, crankPin, rodRotationZ };
 })();
   </script>
 </body>
