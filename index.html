@@ -4,9 +4,141 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>直列四缸发动机 · 运行动画</title>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.186.1/examples/jsm/"
+  }
+}
+</script>
+
+<style>
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --panel: rgba(22, 27, 34, 0.88);
+    --border: #30363d;
+    --intake: #58a6ff;
+    --compression: #d29922;
+    --power: #f85149;
+    --exhaust: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  #app { position: fixed; inset: 0; }
+  #labels { position: fixed; inset: 0; pointer-events: none; }
+  #labels .label {
+    padding: 2px 7px; border-radius: 4px;
+    background: rgba(13, 17, 23, 0.82);
+    border: 1px solid var(--border);
+    color: var(--fg); font-size: 11px; white-space: nowrap;
+  }
+  #hud {
+    position: fixed; top: 14px; left: 14px;
+    display: flex; flex-direction: column; gap: 6px;
+    pointer-events: none;
+  }
+  #hud .row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  #hud .row .cyl { color: var(--muted); }
+  #hud .row .stroke { font-weight: 600; min-width: 3em; }
+  .crank { position: fixed; top: 14px; right: 14px;
+    padding: 5px 10px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums; }
+  #panel {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    padding: 10px 16px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border);
+    backdrop-filter: blur(6px); max-width: calc(100vw - 28px);
+  }
+  #panel label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  #panel .value { color: var(--fg); font-variant-numeric: tabular-nums; min-width: 4.5em; }
+  #panel input[type="range"] { width: 130px; accent-color: var(--accent); }
+  #panel button {
+    padding: 5px 11px; border-radius: 6px; cursor: pointer;
+    background: #21262d; color: var(--fg);
+    border: 1px solid var(--border); font: inherit;
+  }
+  #panel button:hover { background: #30363d; border-color: #8b949e; }
+  #panel button[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent); color: #0d1117;
+  }
+  #boot-error {
+    position: fixed; inset: 0; display: flex; z-index: 10;
+    align-items: center; justify-content: center;
+    background: var(--bg);
+  }
+  #boot-error[hidden] { display: none; }
+  #boot-error .box {
+    max-width: 560px; padding: 26px 30px; border-radius: 12px;
+    background: var(--panel); border: 1px solid var(--border);
+  }
+  #boot-error h1 { margin: 0 0 12px; font-size: 17px; color: #f85149; }
+  #boot-error p { margin: 0 0 10px; }
+  #boot-error code {
+    display: block; padding: 9px 12px; border-radius: 6px; overflow-x: auto;
+    background: #0d1117; border: 1px solid var(--border);
+    color: var(--accent); font-family: Consolas, monospace; font-size: 12px;
+  }
+</style>
 </head>
 <body>
   <div id="app"></div>
+  <div id="labels"></div>
+
+  <div id="hud"></div>
+  <div class="crank" id="crank-readout">曲轴角 0°</div>
+
+  <div id="panel">
+    <label>转速
+      <input type="range" id="rpm" min="0" max="4000" step="50" value="900">
+      <span class="value" id="rpm-value">900 RPM</span>
+    </label>
+    <button id="pause" aria-pressed="false">暂停</button>
+    <button id="step">单步 +15°</button>
+    <button id="cut" aria-pressed="true">剖切</button>
+    <button id="ghost" aria-pressed="false">半透明</button>
+    <button id="labels-toggle" aria-pressed="true">标签</button>
+    <button id="reset">重置视角</button>
+  </div>
+
+  <div id="boot-error" hidden>
+    <div class="box">
+      <h1>无法加载 3D 引擎</h1>
+      <p>本页需要从 CDN 加载 Three.js。请检查网络连接后刷新。</p>
+      <p id="boot-error-detail"></p>
+      <p>若需离线使用：下载 three 的 <code>three.module.js</code> 与 <code>examples/jsm/</code>
+         到本文件同目录，并把 importmap 中的地址改为相对路径
+         <code>./three/three.module.js</code>。</p>
+      <p style="color:#8b949e;margin:0">注意：改成本地相对路径后必须通过 HTTP 服务器访问
+         （如 <code>python -m http.server</code>），因为浏览器会以 CORS 拦截
+         <code>file://</code> 下的本地模块导入。</p>
+    </div>
+  </div>
+
+  <script>
+    // 离线兜底：必须在模块脚本之前定义为普通脚本，模块脚本失败时才有得调用
+    function showBootError(err) {
+      const box = document.getElementById('boot-error');
+      box.hidden = false;
+      document.getElementById('boot-error-detail').textContent =
+        (err && err.message) ? ('错误详情：' + err.message) : '';
+    }
+  </script>
 
   <!--
     运动学块：纯函数，不依赖 DOM 与 Three.js。
@@ -108,6 +240,95 @@ const KIN = (() => {
   return { DEG, CYCLE_DEG, CONFIG, wrap720, pistonPosition, crankPin, rodRotationZ,
            intakeLift, exhaustLift, strokeAt, cycleAngle, firingOrder };
 })();
+  </script>
+
+  <script type="module">
+    let THREE, OrbitControls, CSS2DRenderer, CSS2DObject, RoomEnvironment;
+    try {
+      THREE = await import('three');
+      ({ OrbitControls } = await import('three/addons/controls/OrbitControls.js'));
+      ({ CSS2DRenderer, CSS2DObject } = await import('three/addons/renderers/CSS2DRenderer.js'));
+      ({ RoomEnvironment } = await import('three/addons/environments/RoomEnvironment.js'));
+    } catch (err) {
+      showBootError(err);
+      throw err;                       // 中止后续初始化，避免满屏级联报错
+    }
+
+    const { CONFIG, DEG } = KIN;       // 来自上方 <script id="kinematics"> 的全局词法绑定
+
+    // ---------- 渲染器 ----------
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.localClippingEnabled = true;     // 剖切模式需要
+    document.getElementById('app').appendChild(renderer.domElement);
+
+    // ---------- CSS2D 标签层 ----------
+    const labelRenderer = new CSS2DRenderer({ element: document.getElementById('labels') });
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+
+    // ---------- 场景与相机 ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+
+    const camera = new THREE.PerspectiveCamera(
+      42, window.innerWidth / window.innerHeight, 0.5, 400);
+    const HOME_POS = new THREE.Vector3(34, 20, 34);
+    const HOME_TARGET = new THREE.Vector3(0, 10, 0);
+    camera.position.copy(HOME_POS);
+
+    // ---------- 环境光照 ----------
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+    keyLight.position.set(24, 40, 26);
+    scene.add(keyLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.28));
+
+    // ---------- 控制器 ----------
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.copy(HOME_TARGET);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.minDistance = 6;
+    controls.maxDistance = 160;
+    controls.update();
+
+    // ---------- 调试接口 ----------
+    // 模块作用域的绑定在 page.evaluate 与控制台里都不可见（模块作用域不是全局作用域），
+    // 因此显式挂到 window 上，供端到端断言使用。后续任务会继续往里补字段。
+    // 注意：KIN 不需要挂——它在传统 <script> 里以顶层 const 声明，本身就在全局词法环境中。
+    window.__debug = { THREE, scene, camera, renderer, controls, KIN };
+
+    // ---------- 尺寸自适应 ----------
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+      labelRenderer.setSize(w, h);
+    }
+    window.addEventListener('resize', resize);
+
+    // ---------- 临时内容：占位立方体，Task 5–6 会替换为发动机 ----------
+    const placeholder = new THREE.Mesh(
+      new THREE.BoxGeometry(10, 10, 10),
+      new THREE.MeshStandardMaterial({ color: 0x58a6ff, metalness: 0.9, roughness: 0.25 })
+    );
+    placeholder.position.set(0, 10, 0);
+    scene.add(placeholder);
+
+    // ---------- 主循环 ----------
+    function render() {
+      controls.update();
+      renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
+    }
+    renderer.setAnimationLoop(render);
   </script>
 </body>
 </html>
